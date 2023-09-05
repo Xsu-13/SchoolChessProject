@@ -1,0 +1,189 @@
+﻿@page "/"
+@using chess.Movement
+@using chess.Mechanics
+@inject IJSRuntime JS
+
+<audio id="sound_move" src="/move.mp3" />
+<audio id="sound_take" src="/take.mp3" />
+<audio id="sound_mat" src="/mat.mp3" />
+<audio id="sound_shah" src="/shah.mp3" />
+<audio id="sound_growth" src="/grows.mp3" />
+
+<table>
+    <tr>
+        <td>
+            <div style="padding: 30px; background-color: dimgray">
+                <img src="/img/150.png" style="width:800px;" />
+                @for (int x = 0; x < 8; x++)
+                {
+                    for (int y = 0; y < 8; y++)
+                    {
+                        var cell = new Cell(x, y);
+                        var img = string.IsNullOrEmpty(Desk.Instance.Matrix[x, y]?.ImgCode) ? "transparent.png" : Desk.Instance.Matrix[x, y].ImgCode + ".png";
+                        <img class="@_classes[x, y]" src="/img/@img" style="width:100px; position:absolute; top:@(750 - 100 * y)px; left:@(63 + 100 * x)px" @onclick="() => FigureClick(cell)" />
+                    }
+                }
+
+                @for (int x = 0; x < 8; x++)
+                {
+                    <span style="color: white; position:absolute; top:850px; left:@(110+100*x)px">@((char)('a' + x))</span>
+                    <span style="color: white; position:absolute; top:@(790-100*x)px; left: 43px">@(x + 1)</span>
+                }
+            </div>
+        </td>
+        <td style="vertical-align:top; padding-left:20px">
+            <h3>ИНДИВИДУАЛЬНЫЙ ИТОГОВЫЙ ПРОЕКТ<br>"Компьютерный Шахматист"</h3>
+            <h4>Косоногова Ксения Викторовна, 11 «Б»</h4><br>
+            <label><input type="checkbox" @bind="_botEnabled" /> Компьютерный шахматист включен</label>  <br><br>
+            <button @onclick="ResetDesk">Новая партия</button> <button @onclick="TestLayout">Тестовая расстановка</button><br><br>
+
+            Сейчас ход <b>@(Desk.Instance.CurrentSide == Side.White ? "Белых" : "Черных")</b><br>
+            Ходов проверено: @Bot.PostitionsChecked<br><br>
+            Журнал ходов: @Desk.Instance.MovesReadableString <br>
+        </td>
+    </tr>
+</table>
+
+
+@code
+{
+    private bool _botEnabled = true;
+    private Cell _selectedFigCell;
+    private string[,] _classes = new string[9, 9];
+
+    protected override void OnInitialized()
+    {
+    }
+
+    private async void FigureClick(Cell cell)
+    {
+        if (_selectedFigCell == null)
+        {
+            FigureSelect(cell);
+        }
+        else
+        {
+            var move = FigureMove(cell);
+
+            if (move == null)
+                //ход не состоялся, делаем еще один
+                FigureSelect(cell);
+
+            if (move != null)
+            {
+                //состоялся, озвучим
+                Sound(move);
+
+                //пусть походит бот?
+                if (_botEnabled && Desk.Instance.CurrentSide == Side.Black)
+                {
+                    move = await Desk.Instance.BotMove();
+                    if (move == null) return;
+                    Sound(move);
+                }
+            }
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    //выбираем только
+    private void FigureSelect(Cell cell)
+    {
+        var figObj = Desk.Instance.GetFigure(cell);
+        if (figObj == null)
+            //клик в пустую клетку на этапе выбора фигуры
+            return;
+        if (figObj.Side != Desk.Instance.CurrentSide)
+            //выбранная фигура не совпала с стороной текущего хода
+            return;
+
+        _selectedFigCell = cell;
+        GlowCell(_selectedFigCell, GlowType.Selected);
+
+        //засветим доступные ходы
+        foreach (var move in Desk.Instance.GetAllowedMoves(figObj).ToArray())
+            GlowCell(move, GlowType.CanMove);
+    }
+
+    //ходим или бъем
+    private Move FigureMove(Cell cell)
+    {
+        var newClickCell = cell;
+        Move move = null;
+
+        //проверим разрешенность хода
+        var figObj = Desk.Instance.GetFigure(_selectedFigCell);
+        var allowedMoves = Desk.Instance.GetAllowedMoves(figObj).ToArray();
+        var allowedMove = allowedMoves.FirstOrDefault(x => x.Equals(newClickCell));
+        if (allowedMove != null)
+        {
+            move = new Move(from: _selectedFigCell, to: allowedMove);
+            Desk.Instance.Move(move);
+            Desk.Instance.MovesReadableString += move + " ";
+            var consequenceType = figObj.MoveConsequences(allowedMove);
+            if (consequenceType == ConsequenceType.QueenGrows)
+                JS.InvokeAsync<string>("PlaySound", "sound_growth");
+            Desk.Instance.ChangeSide();
+            Desk.Instance.CheckShahmat(figObj, move);
+        }
+
+        GlowCell(_selectedFigCell, GlowType.Stop);
+        _selectedFigCell = null;
+
+        return move;
+    }
+
+    private void GlowCell(Cell cell, GlowType glowType)
+    {
+        if (glowType == GlowType.Stop)
+        {
+            Array.Clear(_classes, 0, _classes.Length);
+            return;
+        }
+        var className = GetClassByGlowType(glowType);
+        var toCoord = cell.ToArray();
+        _classes.SetValue(className, toCoord);
+    }
+
+    private string GetClassByGlowType(GlowType type)
+    {
+        switch (type)
+        {
+            case GlowType.Selected:
+                return "f-sel";
+            case GlowType.CanMove:
+                return "f-move";
+            case GlowType.Stop:
+                return "";
+            default:
+                return "";
+        }
+    }
+
+    private void TestLayout() => Desk.Instance.TestLayout();
+
+    private void ResetDesk()
+    {
+        Desk.Instance.Reset();
+        GlowCell(_selectedFigCell, GlowType.Stop);
+    }
+
+    //private void RestoreDesk() => Desk.RestoreDesk();
+
+    private string GetSoundByType(Move move)
+    {
+        if (move.Mat)
+            return "sound_mat";
+        if (move.Shah)
+            return "sound_shah";
+        if (move.Victim != null)
+            return "sound_take";
+        return "sound_move";
+    }
+
+    async void Sound(Move move)
+    {
+        await JS.InvokeAsync<string>("PlaySound", GetSoundByType(move));
+    }
+}
